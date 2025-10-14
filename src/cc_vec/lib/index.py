@@ -42,8 +42,6 @@ class VectorStoreLoader:
             "metadata": {
                 "created_by": "cc-vec",
                 "cc_vec_version": "0.1.0",
-                "embedding_model": self.config.embedding_model,
-                "embedding_dimensions": str(self.config.embedding_dimensions),
             },
             "chunking_strategy": {
                 "type": "static",
@@ -51,6 +49,10 @@ class VectorStoreLoader:
                     "max_chunk_size_tokens": self.config.chunk_size,
                     "chunk_overlap_tokens": self.config.overlap,
                 },
+            },
+            "extra_body": {
+                "embedding_model": self.config.embedding_model,
+                "embedding_dimension": self.config.embedding_dimensions,
             },
         }
 
