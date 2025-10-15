@@ -26,16 +26,16 @@ Search, analyze, and index Common Crawl data into vector stores for RAG applicat
 
 ```bash
 # Search Common Crawl index
-uv run cc-vec search --url-pattern "%.github.io" --limit 10
+uv run cc-vec search --url-patterns "%.github.io" --limit 10
 
 # Get statistics
-uv run cc-vec stats --url-pattern "%.edu"
+uv run cc-vec stats --url-patterns "%.edu"
 
 # Fetch and process content (returns clean text)
-uv run cc-vec fetch --url-pattern "%.example.com" --limit 5
+uv run cc-vec fetch --url-patterns "%.example.com" --limit 5
 
 # Advanced filtering - multiple filters can be combined
-uv run cc-vec fetch --url-pattern "%.github.io" --status-codes "200,201" --mime-types "text/html" --limit 10
+uv run cc-vec fetch --url-patterns "%.github.io" --status-codes "200,201" --mime-types "text/html" --limit 10
 
 # Filter by hostname instead of pattern
 uv run cc-vec search --url-host-names "github.io,github.com" --limit 10
@@ -50,7 +50,7 @@ uv run cc-vec search --url-host-registered-domains "github.com,example.com" --li
 uv run cc-vec search --url-host-names "github.io" --url-paths "/blog/%,/docs/%" --limit 10
 
 # Query across multiple Common Crawl datasets
-uv run cc-vec search --url-pattern "%.edu" --crawl-ids "CC-MAIN-2024-33,CC-MAIN-2024-30" --limit 20
+uv run cc-vec search --url-patterns "%.edu" --crawl-ids "CC-MAIN-2024-33,CC-MAIN-2024-30" --limit 20
 
 # List available Common Crawl datasets
 uv run cc-vec list-crawls
@@ -61,10 +61,10 @@ uv run cc-vec list-filter-columns --output json
 
 # Vector operations (require OPENAI_API_KEY)
 # Create vector store with processed content (OpenAI handles chunking with token limits)
-uv run cc-vec index --url-pattern "%.github.io" --vector-store-name "ml-research" --limit 50 --chunk-size 800 --overlap 400
+uv run cc-vec index --url-patterns "%.github.io" --vector-store-name "ml-research" --limit 50 --chunk-size 800 --overlap 400
 
 # Vector store name is optional - will auto-generate if not provided
-uv run cc-vec index --url-pattern "%.github.io" --limit 50
+uv run cc-vec index --url-patterns "%.github.io" --limit 50
 
 # List cc-vec vector stores (default - only shows stores created by cc-vec)
 uv run cc-vec list --output json
