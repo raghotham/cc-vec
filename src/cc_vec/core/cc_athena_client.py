@@ -50,69 +50,190 @@ class CrawlQueryBuilder:
         - `example.com` → url_host_tld = 'com' AND url_host_name IN ('example.com', 'www.example.com')
         - `*.example.com` → url_host_tld = 'com' AND url_host_registered_domain = 'example.com'
         - `example.com/blog/*` → url_host_tld = 'com' AND url_host_name = 'example.com' AND url_path LIKE '/blog/%'
+        - `http://example.com` → strip protocol, optimize as 'example.com'
 
         Args:
-            pattern: URL pattern (supports * wildcards)
+            pattern: URL pattern (supports * or % wildcards)
 
         Returns:
             Dictionary with extracted filters:
             {
                 'tld': str,
                 'registered_domain': str,
-                'host_name': str,
+                'host_names': list[str],  # Can include www variant
                 'path': str,
-                'use_fallback': bool  # True if pattern is too complex for optimization
+                'use_fallback': bool,
+                'reason': str  # Why fallback was chosen
             }
         """
         # Convert * wildcards to % for SQL LIKE
         sql_pattern = pattern.replace("*", "%")
 
+        # Strip common protocols
+        sql_pattern = re.sub(r'^(https?|ftp)://', '', sql_pattern, flags=re.IGNORECASE)
+
         # Initialize result
         result = {
             'tld': None,
             'registered_domain': None,
-            'host_name': None,
+            'host_names': [],
             'path': None,
-            'use_fallback': False
+            'use_fallback': False,
+            'reason': None
         }
 
-        # Pattern 1: TLD-only pattern (*.va)
+        # Check for complex patterns that should fallback
+        # Multiple wildcards in domain: %foo%bar%, %.%.example.com
+        if sql_pattern.count('%') > 1 and '/' not in sql_pattern:
+            # Exception: %.domain.tld is OK (subdomain wildcard)
+            if not re.match(r'^%\.([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE):
+                result['use_fallback'] = True
+                result['reason'] = 'multiple wildcards in domain'
+                return result
+
+        # Port numbers, query strings, fragments
+        if ':' in sql_pattern or '?' in sql_pattern or '#' in sql_pattern:
+            result['use_fallback'] = True
+            result['reason'] = 'contains port/query/fragment'
+            return result
+
+        # Pattern 1: TLD-only pattern (%.va, .va)
         tld_only_match = re.match(r'^%?\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
         if tld_only_match:
-            result['tld'] = tld_only_match.group(1)
+            result['tld'] = tld_only_match.group(1).lower()
+            result['reason'] = 'tld-only pattern'
             return result
 
-        # Pattern 2: Exact domain (example.com) - extract domain and TLD
-        exact_domain_match = re.match(r'^([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
+        # Pattern 2: Exact domain (example.com or www.example.com)
+        exact_domain_match = re.match(r'^(www\.)?([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
         if exact_domain_match:
-            domain = exact_domain_match.group(1)
-            tld = exact_domain_match.group(2)
+            has_www = exact_domain_match.group(1) is not None
+            domain = exact_domain_match.group(2).lower()
+            tld = exact_domain_match.group(3).lower()
             result['tld'] = tld
-            result['host_name'] = f"{domain}.{tld}"
+            full_domain = f"{domain}.{tld}"
+
+            # If pattern has www, only match www variant
+            # If pattern doesn't have www, match both variants
+            if has_www:
+                result['host_names'] = [f"www.{full_domain}"]
+            else:
+                result['host_names'] = [full_domain, f"www.{full_domain}"]
+
+            result['reason'] = 'exact domain pattern'
             return result
 
-        # Pattern 3: Subdomain wildcard (%.example.com or *.example.com)
-        subdomain_wildcard_match = re.match(r'^%\.([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
+        # Pattern 3: Subdomain wildcard (%.example.com)
+        subdomain_wildcard_match = re.match(r'^%\.(www\.)?([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
         if subdomain_wildcard_match:
-            domain = subdomain_wildcard_match.group(1)
-            tld = subdomain_wildcard_match.group(2)
+            has_www = subdomain_wildcard_match.group(1) is not None
+            domain = subdomain_wildcard_match.group(2).lower()
+            tld = subdomain_wildcard_match.group(3).lower()
+
+            # For %.example.com, we want all subdomains of example.com
+            # registered_domain filters on the base domain
             result['tld'] = tld
             result['registered_domain'] = f"{domain}.{tld}"
+            result['reason'] = 'subdomain wildcard pattern'
             return result
 
-        # Pattern 4: Domain with path (example.com/blog/% or example.com/blog/*)
-        domain_with_path_match = re.match(r'^([a-z0-9-]+)\.([a-z]{2,})(/.*)$', sql_pattern, re.IGNORECASE)
+        # Pattern 4: Exact domain with path (example.com/blog/%)
+        domain_with_path_match = re.match(r'^(www\.)?([a-z0-9-]+)\.([a-z]{2,})(/.*)$', sql_pattern, re.IGNORECASE)
         if domain_with_path_match:
-            domain = domain_with_path_match.group(1)
-            tld = domain_with_path_match.group(2)
-            path = domain_with_path_match.group(3)
+            has_www = domain_with_path_match.group(1) is not None
+            domain = domain_with_path_match.group(2).lower()
+            tld = domain_with_path_match.group(3).lower()
+            path = domain_with_path_match.group(4)
+
             result['tld'] = tld
-            result['host_name'] = f"{domain}.{tld}"
+            full_domain = f"{domain}.{tld}"
+
+            # For paths, be more strict - only match exact hostname
+            if has_www:
+                result['host_names'] = [f"www.{full_domain}"]
+            else:
+                result['host_names'] = [full_domain]
+
             result['path'] = path
+            result['reason'] = 'domain with path pattern'
+            return result
+
+        # Pattern 5: Subdomain wildcard with path (%.example.com/blog/%)
+        subdomain_with_path_match = re.match(r'^%\.([a-z0-9-]+)\.([a-z]{2,})(/.*)$', sql_pattern, re.IGNORECASE)
+        if subdomain_with_path_match:
+            domain = subdomain_with_path_match.group(1).lower()
+            tld = subdomain_with_path_match.group(2).lower()
+            path = subdomain_with_path_match.group(3)
+
+            result['tld'] = tld
+            result['registered_domain'] = f"{domain}.{tld}"
+            result['path'] = path
+            result['reason'] = 'subdomain wildcard with path'
             return result
 
         # If pattern doesn't match any optimization pattern, use fallback
         result['use_fallback'] = True
+        result['reason'] = 'pattern too complex for optimization'
+        return result
+
+    def _optimize_url_patterns(self) -> dict:
+        """Convert url_patterns to optimized indexed column filters.
+
+        Processes all patterns in filter_config.url_patterns and extracts
+        indexed column filters where possible, falling back to url LIKE for
+        complex patterns.
+
+        Returns:
+            Dictionary with:
+            {
+                'tlds': set[str],
+                'registered_domains': set[str],
+                'host_names': set[str],
+                'paths': set[str],
+                'fallback_patterns': list[str],
+                'optimized_count': int,
+                'fallback_count': int,
+            }
+        """
+        result = {
+            'tlds': set(),
+            'registered_domains': set(),
+            'host_names': set(),
+            'paths': set(),
+            'fallback_patterns': [],
+            'optimized_count': 0,
+            'fallback_count': 0,
+        }
+
+        if not self.filter_config.url_patterns:
+            return result
+
+        for pattern in self.filter_config.url_patterns:
+            parsed = self._parse_url_pattern(pattern)
+
+            if parsed['use_fallback']:
+                # Pattern is too complex, use url LIKE
+                safe_pattern = self._escape_sql_string(pattern.replace("*", "%"))
+                result['fallback_patterns'].append(safe_pattern)
+                result['fallback_count'] += 1
+                logger.debug(f"Pattern '{pattern}' using fallback url LIKE ({parsed['reason']})")
+            else:
+                # Pattern can be optimized
+                if parsed['tld']:
+                    result['tlds'].add(parsed['tld'])
+
+                if parsed['registered_domain']:
+                    result['registered_domains'].add(parsed['registered_domain'])
+
+                if parsed['host_names']:
+                    result['host_names'].update(parsed['host_names'])
+
+                if parsed['path']:
+                    result['paths'].add(parsed['path'])
+
+                result['optimized_count'] += 1
+                logger.info(f"Optimized pattern '{pattern}' using indexed columns ({parsed['reason']})")
+
         return result
 
     @staticmethod
@@ -304,47 +425,65 @@ class CrawlQueryBuilder:
             "subset = 'warc'",
         ]
 
-        if self.filter_config.url_patterns:
-            safe_patterns = [
-                self._escape_sql_string(pattern.replace("*", "%"))
-                for pattern in self.filter_config.url_patterns
-            ]
-            where_conditions.append(self._build_like_conditions("url", safe_patterns))
+        # Optimize url_patterns if provided
+        optimized = self._optimize_url_patterns()
 
-        if self.filter_config.url_host_names:
-            safe_hosts = [
-                self._escape_sql_string(hostname)
-                for hostname in self.filter_config.url_host_names
-            ]
-            where_conditions.append(
-                self._build_exact_match_condition("url_host_name", safe_hosts)
-            )
-
+        # Merge optimized filters with explicitly set filters (union/OR logic)
+        # TLDs: combine optimized + explicit
+        combined_tlds = optimized['tlds'].copy()
         if self.filter_config.url_host_tlds:
-            safe_tlds = [
-                self._escape_sql_string(tld)
-                for tld in self.filter_config.url_host_tlds
-            ]
+            combined_tlds.update(self.filter_config.url_host_tlds)
+
+        if combined_tlds:
+            safe_tlds = [self._escape_sql_string(tld) for tld in combined_tlds]
             where_conditions.append(
                 self._build_exact_match_condition("url_host_tld", safe_tlds)
             )
 
+        # Registered domains: combine optimized + explicit
+        combined_registered_domains = optimized['registered_domains'].copy()
         if self.filter_config.url_host_registered_domains:
-            safe_domains = [
-                self._escape_sql_string(domain)
-                for domain in self.filter_config.url_host_registered_domains
-            ]
+            combined_registered_domains.update(self.filter_config.url_host_registered_domains)
+
+        if combined_registered_domains:
+            safe_domains = [self._escape_sql_string(domain) for domain in combined_registered_domains]
             where_conditions.append(
                 self._build_exact_match_condition("url_host_registered_domain", safe_domains)
             )
 
+        # Host names: combine optimized + explicit
+        combined_host_names = optimized['host_names'].copy()
+        if self.filter_config.url_host_names:
+            combined_host_names.update(self.filter_config.url_host_names)
+
+        if combined_host_names:
+            safe_hosts = [self._escape_sql_string(hostname) for hostname in combined_host_names]
+            where_conditions.append(
+                self._build_exact_match_condition("url_host_name", safe_hosts)
+            )
+
+        # Paths: combine optimized + explicit
+        combined_paths = optimized['paths'].copy()
         if self.filter_config.url_paths:
-            safe_paths = [
-                self._escape_sql_string(path)
-                for path in self.filter_config.url_paths
-            ]
+            combined_paths.update(self.filter_config.url_paths)
+
+        if combined_paths:
+            safe_paths = [self._escape_sql_string(path) for path in combined_paths]
             where_conditions.append(
                 self._build_like_conditions("url_path", safe_paths)
+            )
+
+        # Fallback patterns that couldn't be optimized
+        if optimized['fallback_patterns']:
+            where_conditions.append(
+                self._build_like_conditions("url", optimized['fallback_patterns'])
+            )
+
+        # Log optimization summary if patterns were optimized
+        if optimized['optimized_count'] > 0 or optimized['fallback_count'] > 0:
+            logger.info(
+                f"URL pattern optimization: {optimized['optimized_count']} optimized, "
+                f"{optimized['fallback_count']} using fallback"
             )
 
         if self.filter_config.status_codes:
