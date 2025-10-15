@@ -4,14 +4,14 @@ import logging
 from typing import Any, Dict, List
 
 from mcp.types import TextContent
-from .base import BaseHandler
+from .base import FilterHandler
 from ... import search as search_function
-from ...types import FilterConfig
+from ..filter_utils import parse_filter_config_from_mcp
 
 logger = logging.getLogger(__name__)
 
 
-class CCSearchHandler(BaseHandler):
+class CCSearchHandler(FilterHandler):
     """Handler for cc_search MCP method."""
 
     def __init__(self, api_method=None):
@@ -19,53 +19,19 @@ class CCSearchHandler(BaseHandler):
 
     async def handle(self, args: Dict[str, Any]) -> List[TextContent]:
         """Handle cc_search tool calls."""
-        url_pattern = args.get("url_pattern")
         limit = args.get("limit", 10)
 
-        url_host_names = args.get("url_host_names")
-        crawl_ids = args.get("crawl_ids")
-        status_codes = args.get("status_codes")
-        mime_types = args.get("mime_types")
-        charsets = args.get("charsets")
-        languages = args.get("languages")
-        date_from = args.get("date_from")
-        date_to = args.get("date_to")
-        custom_filters = args.get("custom_filters")
-
-        # Convert url_pattern to list if provided
-        url_patterns_list = [url_pattern] if url_pattern else None
-
-        # Convert crawl_ids to list if needed
-        crawl_ids_list = crawl_ids
-
-        # Construct FilterConfig
-        filter_config = FilterConfig(
-            url_patterns=url_patterns_list,
-            url_host_names=url_host_names,
-            crawl_ids=crawl_ids_list,
-            status_codes=status_codes,
-            mime_types=mime_types,
-            charsets=charsets,
-            languages=languages,
-            date_from=date_from,
-            date_to=date_to,
-            custom_filters=custom_filters,
-        )
+        # Parse FilterConfig from MCP arguments
+        filter_config = parse_filter_config_from_mcp(args)
 
         try:
             results = search_function(filter_config, limit=limit)
 
             if not results:
-                filter_desc = (
-                    f"pattern '{url_pattern}'" if url_pattern else "specified filters"
-                )
-                response_text = f"SEARCH RESULTS: 0 URLs found for {filter_desc}"
+                response_text = "SEARCH RESULTS: 0 URLs found for specified filters"
                 return [TextContent(type="text", text=response_text)]
 
-            filter_desc = (
-                f"pattern '{url_pattern}'" if url_pattern else "specified filters"
-            )
-            summary = f"SEARCH RESULTS: Found {len(results)} URLs for {filter_desc}"
+            summary = f"SEARCH RESULTS: Found {len(results)} URLs for specified filters"
 
             url_list = "\n\nURL LIST:"
             for i, record in enumerate(results, 1):
@@ -79,10 +45,18 @@ class CCSearchHandler(BaseHandler):
 
             metadata = "\n\nSUMMARY:"
             metadata += f"\n- Total URLs found: {len(results)}"
-            if url_pattern:
-                metadata += f"\n- Search pattern: {url_pattern}"
-            if crawl_ids:
-                metadata += f"\n- Crawl IDs: {crawl_ids if isinstance(crawl_ids, str) else ', '.join(crawl_ids)}"
+
+            # Show active filters
+            if filter_config.url_patterns:
+                metadata += f"\n- URL patterns: {', '.join(filter_config.url_patterns)}"
+            if filter_config.url_host_names:
+                metadata += f"\n- Hostnames: {', '.join(filter_config.url_host_names)}"
+            if filter_config.url_host_tlds:
+                metadata += f"\n- TLDs: {', '.join(filter_config.url_host_tlds)}"
+            if filter_config.url_host_registered_domains:
+                metadata += f"\n- Registered domains: {', '.join(filter_config.url_host_registered_domains)}"
+            if filter_config.crawl_ids:
+                metadata += f"\n- Crawl IDs: {', '.join(filter_config.crawl_ids)}"
             metadata += f"\n- Limit applied: {limit}"
 
             if limit < 100:

@@ -39,6 +39,83 @@ class CrawlQueryBuilder:
         self.table = "ccindex"
 
     @staticmethod
+    def _parse_url_pattern(pattern: str) -> dict:
+        """Parse URL pattern to extract optimized column filters.
+
+        Analyzes URL patterns to determine which indexed columns can be used
+        for better query performance in Athena.
+
+        Pattern types:
+        - `*.va` → url_host_tld = 'va'
+        - `example.com` → url_host_tld = 'com' AND url_host_name IN ('example.com', 'www.example.com')
+        - `*.example.com` → url_host_tld = 'com' AND url_host_registered_domain = 'example.com'
+        - `example.com/blog/*` → url_host_tld = 'com' AND url_host_name = 'example.com' AND url_path LIKE '/blog/%'
+
+        Args:
+            pattern: URL pattern (supports * wildcards)
+
+        Returns:
+            Dictionary with extracted filters:
+            {
+                'tld': str,
+                'registered_domain': str,
+                'host_name': str,
+                'path': str,
+                'use_fallback': bool  # True if pattern is too complex for optimization
+            }
+        """
+        # Convert * wildcards to % for SQL LIKE
+        sql_pattern = pattern.replace("*", "%")
+
+        # Initialize result
+        result = {
+            'tld': None,
+            'registered_domain': None,
+            'host_name': None,
+            'path': None,
+            'use_fallback': False
+        }
+
+        # Pattern 1: TLD-only pattern (*.va)
+        tld_only_match = re.match(r'^%?\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
+        if tld_only_match:
+            result['tld'] = tld_only_match.group(1)
+            return result
+
+        # Pattern 2: Exact domain (example.com) - extract domain and TLD
+        exact_domain_match = re.match(r'^([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
+        if exact_domain_match:
+            domain = exact_domain_match.group(1)
+            tld = exact_domain_match.group(2)
+            result['tld'] = tld
+            result['host_name'] = f"{domain}.{tld}"
+            return result
+
+        # Pattern 3: Subdomain wildcard (%.example.com or *.example.com)
+        subdomain_wildcard_match = re.match(r'^%\.([a-z0-9-]+)\.([a-z]{2,})$', sql_pattern, re.IGNORECASE)
+        if subdomain_wildcard_match:
+            domain = subdomain_wildcard_match.group(1)
+            tld = subdomain_wildcard_match.group(2)
+            result['tld'] = tld
+            result['registered_domain'] = f"{domain}.{tld}"
+            return result
+
+        # Pattern 4: Domain with path (example.com/blog/% or example.com/blog/*)
+        domain_with_path_match = re.match(r'^([a-z0-9-]+)\.([a-z]{2,})(/.*)$', sql_pattern, re.IGNORECASE)
+        if domain_with_path_match:
+            domain = domain_with_path_match.group(1)
+            tld = domain_with_path_match.group(2)
+            path = domain_with_path_match.group(3)
+            result['tld'] = tld
+            result['host_name'] = f"{domain}.{tld}"
+            result['path'] = path
+            return result
+
+        # If pattern doesn't match any optimization pattern, use fallback
+        result['use_fallback'] = True
+        return result
+
+    @staticmethod
     def _escape_sql_string(value: str) -> str:
         """Escape SQL string to prevent injection attacks.
 
@@ -240,7 +317,34 @@ class CrawlQueryBuilder:
                 for hostname in self.filter_config.url_host_names
             ]
             where_conditions.append(
-                self._build_like_conditions("url_host_name", safe_hosts)
+                self._build_exact_match_condition("url_host_name", safe_hosts)
+            )
+
+        if self.filter_config.url_host_tlds:
+            safe_tlds = [
+                self._escape_sql_string(tld)
+                for tld in self.filter_config.url_host_tlds
+            ]
+            where_conditions.append(
+                self._build_exact_match_condition("url_host_tld", safe_tlds)
+            )
+
+        if self.filter_config.url_host_registered_domains:
+            safe_domains = [
+                self._escape_sql_string(domain)
+                for domain in self.filter_config.url_host_registered_domains
+            ]
+            where_conditions.append(
+                self._build_exact_match_condition("url_host_registered_domain", safe_domains)
+            )
+
+        if self.filter_config.url_paths:
+            safe_paths = [
+                self._escape_sql_string(path)
+                for path in self.filter_config.url_paths
+            ]
+            where_conditions.append(
+                self._build_like_conditions("url_path", safe_paths)
             )
 
         if self.filter_config.status_codes:

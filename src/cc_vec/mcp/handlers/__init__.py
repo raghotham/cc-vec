@@ -1,6 +1,6 @@
 """MCP handlers for cc-vec functionality."""
 
-from .base import BaseHandler
+from .base import BaseHandler, FilterHandler
 from .cc_stats import CCStatsHandler
 from .cc_search import CCSearchHandler
 from .cc_fetch import CCFetchHandler
@@ -11,6 +11,7 @@ from .cc_list_crawls import CCListCrawlsHandler
 
 __all__ = [
     "BaseHandler",
+    "FilterHandler",
     "CCStatsHandler",
     "CCSearchHandler",
     "CCFetchHandler",

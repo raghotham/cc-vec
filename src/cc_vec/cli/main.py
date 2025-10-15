@@ -8,7 +8,6 @@ import sys
 
 import click
 
-# Use the simplified API
 from .. import (
     stats as stats_function,
     search as search_function,
@@ -20,11 +19,9 @@ from .. import (
 )
 from ..types import FilterConfig, VectorStoreConfig
 from ..types.config import load_config
+from .filter_options import generate_filter_options, parse_filter_config_from_cli
 
 logger = logging.getLogger(__name__)
-
-
-# Removed get_athena_client - now using simplified API that handles client creation
 
 
 @click.group()
@@ -33,6 +30,15 @@ logger = logging.getLogger(__name__)
 def cli(ctx, debug):
     """cc-vec: Common Crawl Vectorizer CLI"""
     ctx.ensure_object(dict)
+
+    # Skip config loading if just showing help or for commands that don't need it
+    if ctx.invoked_subcommand is None or '--help' in sys.argv or '-h' in sys.argv:
+        return
+
+    # Commands that don't require environment variables
+    no_config_commands = ['list-filter-columns']
+    if ctx.invoked_subcommand in no_config_commands:
+        return
 
     # Load configuration from environment variables
     try:
@@ -53,40 +59,8 @@ def cli(ctx, debug):
 
 
 @cli.command()
-@click.option(
-    "--url-pattern", help="URL pattern to search (e.g., '%.github.io%', '%.edu%')"
-)
+@generate_filter_options
 @click.option("--limit", "-l", default=10, help="Maximum number of results")
-@click.option(
-    "--url-host-names",
-    help="URL hostnames to filter by (comma-separated, e.g., 'example.com,test.com')",
-)
-@click.option(
-    "--crawl-ids",
-    help="Crawl IDs to filter by (comma-separated, e.g., 'CC-MAIN-2024-33,CC-MAIN-2024-30')",
-)
-@click.option(
-    "--status-codes",
-    help="HTTP status codes to filter by (comma-separated, e.g., '200,201')",
-)
-@click.option(
-    "--mime-types",
-    help="MIME types to filter by (comma-separated, e.g., 'text/html,text/plain')",
-)
-@click.option(
-    "--charsets",
-    help="Character sets to filter by (comma-separated, e.g., 'utf-8,iso-8859-1')",
-)
-@click.option(
-    "--languages", help="Languages to filter by (comma-separated, e.g., 'en,es')"
-)
-@click.option(
-    "--date-from", help="Start date filter (format: yyyy, yyyyMM, or yyyyMMdd)"
-)
-@click.option("--date-to", help="End date filter (format: yyyy, yyyyMM, or yyyyMMdd)")
-@click.option(
-    "--custom-filters", help="Additional CDX filter strings (comma-separated)"
-)
 @click.option(
     "--output",
     "-o",
@@ -95,64 +69,14 @@ def cli(ctx, debug):
     help="Output format",
 )
 @click.pass_context
-def search(
-    ctx,
-    url_pattern,
-    limit,
-    url_host_names,
-    crawl_ids,
-    status_codes,
-    mime_types,
-    charsets,
-    languages,
-    date_from,
-    date_to,
-    custom_filters,
-    output,
-):
+def search(ctx, limit, output, **filter_kwargs):
     """Search Common Crawl for URLs matching filters.
 
     At least one filter parameter is recommended for effective searching.
     """
     try:
-        # Parse comma-separated values
-        url_patterns_list = (
-            [x.strip() for x in url_pattern.split(",")] if url_pattern else None
-        )
-        url_host_names_list = (
-            [x.strip() for x in url_host_names.split(",")] if url_host_names else None
-        )
-        crawl_ids_list = (
-            [x.strip() for x in crawl_ids.split(",")] if crawl_ids else None
-        )
-
-        status_codes_list = (
-            [int(x.strip()) for x in status_codes.split(",")] if status_codes else None
-        )
-        mime_types_list = (
-            [x.strip() for x in mime_types.split(",")] if mime_types else None
-        )
-        charsets_list = [x.strip() for x in charsets.split(",")] if charsets else None
-        languages_list = (
-            [x.strip() for x in languages.split(",")] if languages else None
-        )
-        custom_filters_list = (
-            [x.strip() for x in custom_filters.split(",")] if custom_filters else None
-        )
-
-        # Construct FilterConfig
-        filter_config = FilterConfig(
-            url_patterns=url_patterns_list,
-            url_host_names=url_host_names_list,
-            crawl_ids=crawl_ids_list,
-            status_codes=status_codes_list,
-            mime_types=mime_types_list,
-            charsets=charsets_list,
-            languages=languages_list,
-            date_from=date_from,
-            date_to=date_to,
-            custom_filters=custom_filters_list,
-        )
+        # Parse filter config from CLI arguments
+        filter_config = parse_filter_config_from_cli(**filter_kwargs)
 
         # Use the simplified API that handles client initialization
         results = search_function(filter_config, limit=limit)
@@ -173,16 +97,16 @@ def search(
                 ],
                 "total_found": len(results),
                 "backend": "athena",
-                "crawl_ids": crawl_ids_list,
+                "crawl_ids": filter_config.crawl_ids,
             }
             click.echo(json.dumps(result, indent=2))
         else:
             click.echo(f"Found {len(results)} results via athena:")
-            if crawl_ids_list:
+            if filter_config.crawl_ids:
                 crawl_display = (
-                    ", ".join(crawl_ids_list)
-                    if len(crawl_ids_list) > 1
-                    else crawl_ids_list[0]
+                    ", ".join(filter_config.crawl_ids)
+                    if len(filter_config.crawl_ids) > 1
+                    else filter_config.crawl_ids[0]
                 )
                 click.echo(f"Crawl(s): {crawl_display}")
             click.echo()
@@ -202,39 +126,7 @@ def search(
 
 
 @cli.command()
-@click.option(
-    "--url-pattern", help="URL pattern to analyze (e.g., '%.github.io%', '%.edu%')"
-)
-@click.option(
-    "--url-host-names",
-    help="URL hostnames to filter by (comma-separated, e.g., 'example.com,test.com')",
-)
-@click.option(
-    "--crawl-ids",
-    help="Crawl IDs to filter by (comma-separated, e.g., 'CC-MAIN-2024-33,CC-MAIN-2024-30')",
-)
-@click.option(
-    "--status-codes",
-    help="HTTP status codes to filter by (comma-separated, e.g., '200,201')",
-)
-@click.option(
-    "--mime-types",
-    help="MIME types to filter by (comma-separated, e.g., 'text/html,text/plain')",
-)
-@click.option(
-    "--charsets",
-    help="Character sets to filter by (comma-separated, e.g., 'utf-8,iso-8859-1')",
-)
-@click.option(
-    "--languages", help="Languages to filter by (comma-separated, e.g., 'en,es')"
-)
-@click.option(
-    "--date-from", help="Start date filter (format: yyyy, yyyyMM, or yyyyMMdd)"
-)
-@click.option("--date-to", help="End date filter (format: yyyy, yyyyMM, or yyyyMMdd)")
-@click.option(
-    "--custom-filters", help="Additional CDX filter strings (comma-separated)"
-)
+@generate_filter_options
 @click.option(
     "--output",
     "-o",
@@ -243,60 +135,11 @@ def search(
     help="Output format",
 )
 @click.pass_context
-def stats(
-    ctx,
-    url_pattern,
-    url_host_names,
-    crawl_ids,
-    status_codes,
-    mime_types,
-    charsets,
-    languages,
-    date_from,
-    date_to,
-    custom_filters,
-    output,
-):
+def stats(ctx, output, **filter_kwargs):
     """Get statistics for Common Crawl query patterns."""
     try:
-        # Parse comma-separated values
-        url_patterns_list = (
-            [x.strip() for x in url_pattern.split(",")] if url_pattern else None
-        )
-        url_host_names_list = (
-            [x.strip() for x in url_host_names.split(",")] if url_host_names else None
-        )
-        crawl_ids_list = (
-            [x.strip() for x in crawl_ids.split(",")] if crawl_ids else None
-        )
-
-        status_codes_list = (
-            [int(x.strip()) for x in status_codes.split(",")] if status_codes else None
-        )
-        mime_types_list = (
-            [x.strip() for x in mime_types.split(",")] if mime_types else None
-        )
-        charsets_list = [x.strip() for x in charsets.split(",")] if charsets else None
-        languages_list = (
-            [x.strip() for x in languages.split(",")] if languages else None
-        )
-        custom_filters_list = (
-            [x.strip() for x in custom_filters.split(",")] if custom_filters else None
-        )
-
-        # Construct FilterConfig
-        filter_config = FilterConfig(
-            url_patterns=url_patterns_list,
-            url_host_names=url_host_names_list,
-            crawl_ids=crawl_ids_list,
-            status_codes=status_codes_list,
-            mime_types=mime_types_list,
-            charsets=charsets_list,
-            languages=languages_list,
-            date_from=date_from,
-            date_to=date_to,
-            custom_filters=custom_filters_list,
-        )
+        # Parse filter config from CLI arguments
+        filter_config = parse_filter_config_from_cli(**filter_kwargs)
 
         # Use the simplified API that handles client initialization
         response = stats_function(filter_config)
@@ -331,99 +174,16 @@ def stats(
 
 
 @cli.command()
-@click.option(
-    "--url-pattern", help="URL pattern to fetch (e.g., '%.github.io%', '%.edu%')"
-)
+@generate_filter_options
 @click.option("--limit", "-l", default=3, help="Maximum number of records to fetch")
 @click.option("--max-bytes", default=1024, help="Maximum bytes to display per record")
 @click.option("--full", is_flag=True, help="Display full content without truncation")
-@click.option(
-    "--url-host-names",
-    help="URL hostnames to filter by (comma-separated, e.g., 'example.com,test.com')",
-)
-@click.option(
-    "--crawl-ids",
-    help="Crawl IDs to filter by (comma-separated, e.g., 'CC-MAIN-2024-33,CC-MAIN-2024-30')",
-)
-@click.option(
-    "--status-codes",
-    help="HTTP status codes to filter by (comma-separated, e.g., '200,201')",
-)
-@click.option(
-    "--mime-types",
-    help="MIME types to filter by (comma-separated, e.g., 'text/html,text/plain')",
-)
-@click.option(
-    "--charsets",
-    help="Character sets to filter by (comma-separated, e.g., 'utf-8,iso-8859-1')",
-)
-@click.option(
-    "--languages", help="Languages to filter by (comma-separated, e.g., 'en,es')"
-)
-@click.option(
-    "--date-from", help="Start date filter (format: yyyy, yyyyMM, or yyyyMMdd)"
-)
-@click.option("--date-to", help="End date filter (format: yyyy, yyyyMM, or yyyyMMdd)")
-@click.option(
-    "--custom-filters", help="Additional CDX filter strings (comma-separated)"
-)
 @click.pass_context
-def fetch(
-    ctx,
-    url_pattern,
-    limit,
-    max_bytes,
-    full,
-    url_host_names,
-    crawl_ids,
-    status_codes,
-    mime_types,
-    charsets,
-    languages,
-    date_from,
-    date_to,
-    custom_filters,
-):
+def fetch(ctx, limit, max_bytes, full, **filter_kwargs):
     """Fetch Common Crawl content for URLs matching patterns."""
     try:
-        # Parse comma-separated values
-        url_patterns_list = (
-            [x.strip() for x in url_pattern.split(",")] if url_pattern else None
-        )
-        url_host_names_list = (
-            [x.strip() for x in url_host_names.split(",")] if url_host_names else None
-        )
-        crawl_ids_list = (
-            [x.strip() for x in crawl_ids.split(",")] if crawl_ids else None
-        )
-
-        status_codes_list = (
-            [int(x.strip()) for x in status_codes.split(",")] if status_codes else None
-        )
-        mime_types_list = (
-            [x.strip() for x in mime_types.split(",")] if mime_types else None
-        )
-        charsets_list = [x.strip() for x in charsets.split(",")] if charsets else None
-        languages_list = (
-            [x.strip() for x in languages.split(",")] if languages else None
-        )
-        custom_filters_list = (
-            [x.strip() for x in custom_filters.split(",")] if custom_filters else None
-        )
-
-        # Construct FilterConfig
-        filter_config = FilterConfig(
-            url_patterns=url_patterns_list,
-            url_host_names=url_host_names_list,
-            crawl_ids=crawl_ids_list,
-            status_codes=status_codes_list,
-            mime_types=mime_types_list,
-            charsets=charsets_list,
-            languages=languages_list,
-            date_from=date_from,
-            date_to=date_to,
-            custom_filters=custom_filters_list,
-        )
+        # Parse filter config from CLI arguments
+        filter_config = parse_filter_config_from_cli(**filter_kwargs)
 
         # Use the simplified API that handles client initialization
         results = fetch_function(filter_config, limit=limit)
@@ -567,6 +327,62 @@ def list_crawls(ctx, output):
     except Exception as e:
         logger.error("List crawls failed", exc_info=True)
         click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format",
+)
+def list_filter_columns(output):
+    """List all available filter columns from FilterConfig."""
+    try:
+        columns = []
+        for field_name, field_info in FilterConfig.model_fields.items():
+            field_type = field_info.annotation
+            description = field_info.description or ""
+
+            # Get a simplified type string
+            type_str = str(field_type)
+            if "List[str]" in type_str:
+                type_str = "List[str]"
+            elif "List[int]" in type_str:
+                type_str = "List[int]"
+            elif "str" in type_str:
+                type_str = "str"
+            else:
+                type_str = "various"
+
+            columns.append({
+                "name": field_name,
+                "type": type_str,
+                "description": description,
+                "cli_option": f"--{field_name.replace('_', '-')}"
+            })
+
+        if output == "json":
+            click.echo(json.dumps({"filter_columns": columns}, indent=2))
+        else:
+            click.echo("Available Filter Columns:")
+            click.echo()
+            for col in columns:
+                click.echo(f"  {col['cli_option']}")
+                click.echo(f"    Field: {col['name']}")
+                click.echo(f"    Type: {col['type']}")
+                if col['description']:
+                    click.echo(f"    Description: {col['description']}")
+                click.echo()
+
+            click.echo(f"Total: {len(columns)} filter columns available")
+            click.echo()
+            click.echo("These options are available in: search, stats, fetch, and index commands")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
@@ -743,44 +559,12 @@ def query(ctx, query, vector_store_name, vector_store_id, limit, output, save):
 
 
 @cli.command()
-@click.option(
-    "--url-pattern", help="URL pattern to index (e.g., '%.github.io%', '%.edu%')"
-)
+@generate_filter_options
 @click.option(
     "--vector-store-name",
     help="Name for the vector store (auto-generated if not provided)",
 )
 @click.option("--limit", "-l", default=5, help="Maximum number of records to index")
-@click.option(
-    "--url-host-names",
-    help="URL hostnames to filter by (comma-separated, e.g., 'example.com,test.com')",
-)
-@click.option(
-    "--crawl-ids",
-    help="Crawl IDs to filter by (comma-separated, e.g., 'CC-MAIN-2024-33,CC-MAIN-2024-30')",
-)
-@click.option(
-    "--status-codes",
-    help="HTTP status codes to filter by (comma-separated, e.g., '200,201')",
-)
-@click.option(
-    "--mime-types",
-    help="MIME types to filter by (comma-separated, e.g., 'text/html,text/plain')",
-)
-@click.option(
-    "--charsets",
-    help="Character sets to filter by (comma-separated, e.g., 'utf-8,iso-8859-1')",
-)
-@click.option(
-    "--languages", help="Languages to filter by (comma-separated, e.g., 'en,es')"
-)
-@click.option(
-    "--date-from", help="Start date filter (format: yyyy, yyyyMM, or yyyyMMdd)"
-)
-@click.option("--date-to", help="End date filter (format: yyyy, yyyyMM, or yyyyMMdd)")
-@click.option(
-    "--custom-filters", help="Additional CDX filter strings (comma-separated)"
-)
 @click.option(
     "--chunk-size",
     default=800,
@@ -799,30 +583,16 @@ def query(ctx, query, vector_store_name, vector_store_id, limit, output, save):
     help="Output format",
 )
 @click.pass_context
-def index(
-    ctx,
-    url_pattern,
-    vector_store_name,
-    limit,
-    url_host_names,
-    crawl_ids,
-    status_codes,
-    mime_types,
-    charsets,
-    languages,
-    date_from,
-    date_to,
-    custom_filters,
-    chunk_size,
-    overlap,
-    output,
-):
+def index(ctx, vector_store_name, limit, chunk_size, overlap, output, **filter_kwargs):
     """Index Common Crawl content into OpenAI vector store.
 
-    Requires at least one filter parameter (e.g., --url-pattern, --url-host-names, --crawl-ids).
+    Requires at least one filter parameter (e.g., --url-patterns, --url-host-names, --crawl-ids).
     Vector store name will be auto-generated if not provided.
     """
     try:
+        # Parse filter config from CLI arguments
+        filter_config = parse_filter_config_from_cli(**filter_kwargs)
+
         # Generate vector store name if not provided
         if not vector_store_name:
             import re
@@ -831,60 +601,21 @@ def index(
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
             # Generate name based on available filters
-            if url_pattern:
-                clean_pattern = re.sub(r"[^a-zA-Z0-9_-]", "_", url_pattern)
+            if filter_config.url_patterns:
+                clean_pattern = re.sub(r"[^a-zA-Z0-9_-]", "_", filter_config.url_patterns[0])
                 clean_pattern = re.sub(r"_+", "_", clean_pattern).strip("_")
                 vector_store_name = f"ccvec_{clean_pattern}_{timestamp}"
-            elif url_host_names:
+            elif filter_config.url_host_names:
                 clean_hosts = re.sub(
-                    r"[^a-zA-Z0-9_-]", "_", url_host_names.split(",")[0]
+                    r"[^a-zA-Z0-9_-]", "_", filter_config.url_host_names[0]
                 )
                 vector_store_name = f"ccvec_{clean_hosts}_{timestamp}"
-            elif crawl_ids:
-                vector_store_name = f"ccvec_{crawl_ids.split(',')[0]}_{timestamp}"
+            elif filter_config.crawl_ids:
+                vector_store_name = f"ccvec_{filter_config.crawl_ids[0]}_{timestamp}"
             else:
                 vector_store_name = f"ccvec_{timestamp}"
 
             click.echo(f"Auto-generated vector store name: {vector_store_name}")
-
-        # Parse comma-separated values
-        url_patterns_list = (
-            [x.strip() for x in url_pattern.split(",")] if url_pattern else None
-        )
-        url_host_names_list = (
-            [x.strip() for x in url_host_names.split(",")] if url_host_names else None
-        )
-        crawl_ids_list = (
-            [x.strip() for x in crawl_ids.split(",")] if crawl_ids else None
-        )
-
-        status_codes_list = (
-            [int(x.strip()) for x in status_codes.split(",")] if status_codes else None
-        )
-        mime_types_list = (
-            [x.strip() for x in mime_types.split(",")] if mime_types else None
-        )
-        charsets_list = [x.strip() for x in charsets.split(",")] if charsets else None
-        languages_list = (
-            [x.strip() for x in languages.split(",")] if languages else None
-        )
-        custom_filters_list = (
-            [x.strip() for x in custom_filters.split(",")] if custom_filters else None
-        )
-
-        # Construct FilterConfig
-        filter_config = FilterConfig(
-            url_patterns=url_patterns_list,
-            url_host_names=url_host_names_list,
-            crawl_ids=crawl_ids_list,
-            status_codes=status_codes_list,
-            mime_types=mime_types_list,
-            charsets=charsets_list,
-            languages=languages_list,
-            date_from=date_from,
-            date_to=date_to,
-            custom_filters=custom_filters_list,
-        )
 
         # Construct VectorStoreConfig
         vector_store_config = VectorStoreConfig(

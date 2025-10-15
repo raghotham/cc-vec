@@ -55,8 +55,11 @@ class ProcessedContent(BaseModel):
 class FilterConfig(BaseModel):
     """Configuration for filtering Common Crawl data."""
 
-    url_patterns: Optional[List[str]] = None  # Filter by URL pattern
-    url_host_names: Optional[List[str]] = None  # Filter by hostname
+    url_patterns: Optional[List[str]] = None  # Filter by URL pattern (supports * wildcards)
+    url_host_names: Optional[List[str]] = None  # Filter by exact hostname
+    url_host_tlds: Optional[List[str]] = None  # Filter by TLD (e.g., 'com', 'org', 'gov')
+    url_host_registered_domains: Optional[List[str]] = None  # Filter by registered domain (e.g., 'example.com')
+    url_paths: Optional[List[str]] = None  # Filter by URL path (supports % wildcards)
     crawl_ids: Optional[List[str]] = None  # Filter by specific crawl IDs
     status_codes: Optional[List[int]] = Field(default=[200])
     mime_types: Optional[List[str]] = Field(default=["text/html"])

@@ -40,11 +40,24 @@ uv run cc-vec fetch --url-pattern "%.github.io" --status-codes "200,201" --mime-
 # Filter by hostname instead of pattern
 uv run cc-vec search --url-host-names "github.io,github.com" --limit 10
 
+# Filter by TLD for better performance (uses indexed column)
+uv run cc-vec search --url-host-tlds "edu,gov" --limit 20
+
+# Filter by registered domain (uses indexed column)
+uv run cc-vec search --url-host-registered-domains "github.com,example.com" --limit 15
+
+# Filter by URL path (for specific site sections)
+uv run cc-vec search --url-host-names "github.io" --url-paths "/blog/%,/docs/%" --limit 10
+
 # Query across multiple Common Crawl datasets
 uv run cc-vec search --url-pattern "%.edu" --crawl-ids "CC-MAIN-2024-33,CC-MAIN-2024-30" --limit 20
 
 # List available Common Crawl datasets
 uv run cc-vec list-crawls
+
+# List all available filter columns (no API keys needed)
+uv run cc-vec list-filter-columns
+uv run cc-vec list-filter-columns --output json
 
 # Vector operations (require OPENAI_API_KEY)
 # Create vector store with processed content (OpenAI handles chunking with token limits)
@@ -99,6 +112,9 @@ for result in results[:3]:
 filter_config = FilterConfig(
     url_patterns=["%.github.io", "%.github.com"],
     url_host_names=["github.io"],
+    url_host_tlds=["io", "com"],  # Filter by TLD (uses indexed column)
+    url_host_registered_domains=["github.com"],  # Filter by domain (uses indexed column)
+    url_paths=["/blog/%", "/docs/%"],  # Filter by URL path
     crawl_ids=["CC-MAIN-2024-33", "CC-MAIN-2024-30"],  # Query multiple crawls
     status_codes=[200, 201],
     mime_types=["text/html"],
@@ -108,6 +124,14 @@ filter_config = FilterConfig(
 
 results = search(filter_config, limit=20)
 print(f"Found {len(results)} URLs matching filters")
+
+# Using indexed columns for better performance
+filter_config = FilterConfig(
+    url_host_tlds=["edu", "gov"],  # Much faster than url_patterns=["%.edu", "%.gov"]
+    status_codes=[200],
+)
+results = search(filter_config, limit=50)
+print(f"Found {len(results)} .edu and .gov sites")
 
 # Fetch and process content (returns clean text)
 filter_config = FilterConfig(url_patterns=["%.example.com"])
@@ -199,6 +223,9 @@ cc_query - Query vector stores for relevant content
 **Example usage in Claude Desktop:**
 - "Use cc_search to find GitHub Pages sites: url_pattern=%.github.io, limit=10"
 - "Use cc_stats to analyze education sites: url_pattern=%.edu"
+- "Use cc_search with indexed columns for better performance: url_host_tlds=['edu', 'gov'], limit=20"
+- "Use cc_search with registered domains: url_host_registered_domains=['github.com'], limit=15"
+- "Use cc_search for specific paths: url_host_names=['github.io'], url_paths=['/blog/%'], limit=10"
 - "Use cc_search across multiple crawls: url_pattern=%.edu, crawl_ids=['CC-MAIN-2024-33', 'CC-MAIN-2024-30']"
 - "Use cc_fetch to get content: url_host_names=['github.io'], limit=5"
 - "Use cc_list_crawls to show available Common Crawl datasets"
@@ -206,6 +233,8 @@ cc_query - Query vector stores for relevant content
 - "Use cc_list_vector_stores to show cc-vec stores (default)"
 - "Use cc_list_vector_stores with cc_vec_only=false to show all vector stores"
 - "Use cc_query to search: vector_store_id=vs-123, query=machine learning"
+
+**Note:** All filter options available in CLI (shown via `cc-vec list-filter-columns`) are also available in MCP tools.
 
 ## License
 

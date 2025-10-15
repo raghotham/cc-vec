@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 import inspect
 
 from mcp.types import TextContent, Tool
+from ..filter_utils import generate_filter_properties
 
 logger = logging.getLogger(__name__)
 
@@ -203,3 +204,25 @@ class BaseHandler(ABC):
             List of TextContent responses
         """
         pass
+
+
+class FilterHandler(BaseHandler):
+    """Base handler for tools that accept FilterConfig parameters.
+
+    This handler dynamically generates tool schema properties from FilterConfig
+    and merges them with any additional parameters defined in the API method signature.
+    """
+
+    def _generate_tool_schema(self, func) -> Dict[str, Any]:
+        """Generate tool schema with FilterConfig properties merged with other parameters."""
+        # Get the standard schema from the parent class
+        base_schema = super()._generate_tool_schema(func)
+
+        # Generate FilterConfig properties
+        filter_properties = generate_filter_properties()
+
+        # Merge filter properties into the schema
+        # FilterConfig fields are always optional, so don't add to required
+        base_schema["properties"].update(filter_properties)
+
+        return base_schema
