@@ -43,7 +43,7 @@ class VectorStoreLoader:
                 "created_by": "cc-vec",
                 "cc_vec_version": "0.1.0",
                 "embedding_model": self.config.embedding_model,
-                "embedding_dimension": str(self.config.embedding_dimension),
+                "embedding_dimension": str(self.config.embedding_dimensions),
             },
             "chunking_strategy": {
                 "type": "static",
